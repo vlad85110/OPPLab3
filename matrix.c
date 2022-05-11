@@ -56,6 +56,7 @@ _matrix* multiply(_matrix* matrix1, _matrix* matrix2) {
             }
         }
     }
+
     return matrix;
 }
 

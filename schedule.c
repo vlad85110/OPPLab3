@@ -11,69 +11,118 @@ int get_chunk(int array_size, int mpi_size) {
     return round_up(array_size, mpi_size);
 }
 
-void sched_matrix(_matrix* matrix, _lattice* lattice) {
+_matrix* sched_matrix_a(_matrix* matrix_a, _lattice* lattice) {
     int mpi_size;
     MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
-    int chunk = get_chunk(matrix->height, lattice->dims[0]);
-    int tmp_size = chunk * matrix->wight;
-    _matrix *tmp = create_matrix(chunk, matrix->wight);
+    int chunk = get_chunk(matrix_a->height, lattice->dims[0]);
+    int tmp_size = chunk * matrix_a->wight;
+    _matrix *tmp = create_matrix(chunk, matrix_a->wight);
 
     int var_coords[2] = {1, 0};
     MPI_Comm line;
     MPI_Cart_sub(lattice->comm, var_coords, &line);
 
-
-    MPI_Scatter(matrix->matrix, 2, MPI_DOUBLE,
-                tmp->matrix, 2, MPI_DOUBLE,
+    MPI_Scatter(matrix_a->matrix, tmp_size, MPI_DOUBLE,
+                tmp->matrix, tmp_size, MPI_DOUBLE,
                 0, line);
 
-    if (lattice->rank_x == 0) {
-        print_matrix(tmp);
+    var_coords[0] = 0;
+    var_coords[1] = 1;
+    MPI_Cart_sub(lattice->comm, var_coords, &line);
+
+    MPI_Bcast(tmp->matrix, tmp_size, MPI_DOUBLE, 0, line);
+
+    return tmp;
+}
+
+_matrix* sched_matrix_b(_matrix* matrix_b, _lattice* lattice) {
+    int chunk = get_chunk(matrix_b->wight, lattice->dims[1]);
+    _matrix *tmp = create_matrix(matrix_b->height, chunk);
+    int tmp_size = chunk * matrix_b->height;
+
+    MPI_Datatype col_type, new;
+    MPI_Type_vector(matrix_b->height, tmp->wight,
+                    matrix_b->wight, MPI_DOUBLE, &col_type);
+    MPI_Type_commit(&col_type);
+    MPI_Type_create_resized(col_type, 0, chunk * sizeof(double), &new);///че это
+    MPI_Type_commit(&new);
+
+    int var_coords[2] = {0, 1};
+    MPI_Comm line;
+    MPI_Cart_sub(lattice->comm, var_coords, &line);
+
+
+    if (lattice->rank_y == 0) {
+        int dis[lattice->dims[1]];
+        int res_cnt[lattice->dims[1]];
+        for (int i = 0; i < lattice->dims[1]; ++i) {
+            dis[i] = i;
+            res_cnt[i] = 1;
+        }
+
+         MPI_Scatterv(matrix_b->matrix, res_cnt, dis, new, tmp->matrix,
+                      tmp_size, MPI_DOUBLE, 0, line);
     }
 
+    var_coords[0] = 1;
+    var_coords[1] = 0;
+    MPI_Cart_sub(lattice->comm, var_coords, &line);
 
+    MPI_Bcast(tmp->matrix, tmp_size, MPI_DOUBLE, 0, line);
 
-    /*int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    return tmp;
+}
 
-    int new_wight = get_chunk(matrix->wight, lattice->dims[1]);
-    _matrix* sub_matrix = create_matrix(chunk, new_wight);
+_matrix* build_matrix(_matrix* sub_matrix, _lattice* lattice, int height, int wight) {
+    _matrix* matrix_c = create_matrix(height, wight);
 
-    double* arr = (double *) malloc(3* sizeof(double ));
+    int var_coords[2] = {0, 1};
+    MPI_Comm line;
+    MPI_Cart_sub(lattice->comm, var_coords, &line);
+    int tmp_size = sub_matrix->height * sub_matrix->wight;
 
-    if (lattice->rank_y == 1) {
+    MPI_Datatype col_type, new;
+    MPI_Type_vector(sub_matrix->height, sub_matrix->wight,
+                    matrix_c->wight, MPI_DOUBLE, &col_type);
+    MPI_Type_commit(&col_type);
+    MPI_Type_create_resized(col_type, 0, sub_matrix->wight * sizeof(double), &new);///че это
+    MPI_Type_commit(&new);
 
-        print_matrix(tmp);
+    _matrix* tmp = create_matrix(sub_matrix->height, wight);
 
-        MPI_Scatter(tmp->matrix, 1, MPI_DOUBLE,
-                    arr, 1, MPI_DOUBLE,
-                    2, lattice->comm);
-
-
-        //print_matrix(sub_matrix);
+    int dis[lattice->dims[1]];
+    int res_cnt[lattice->dims[1]];
+    for (int i = 0; i < lattice->dims[1]; ++i) {
+        dis[i] = i;
+        res_cnt[i] = 1;
     }
+
+    MPI_Gather(sub_matrix->matrix, tmp_size, MPI_DOUBLE, tmp->matrix,
+               1, new, 0, line);
 
     /*for (int i = 0; i < lattice->dims[0]; ++i) {
-        if (lattice->rank_y == i) {
-            for (int j = 0; j < sub_matrix->height; ++j) {
-                int root = 0;
-
-                if (lattice->rank_x == 0) {
-                    root = rank;
-                }
-
-                MPI_Scatter(tmp->matrix + j * new_wight, new_wight, MPI_DOUBLE,
-                            sub_matrix->matrix + j * new_wight, new_wight, MPI_DOUBLE,
-                            root, lattice->comm);
-            }
+        MPI_Barrier(MPI_COMM_WORLD);
+        if (lattice->rank_y == i && lattice->rank_x == 0) {
+            print_matrix(tmp);
+            printf("%d-%d\n", lattice->rank_y, lattice->rank_x);
         }
     }*/
 
+    var_coords[0] = 1;
+    var_coords[1] = 0;
+    MPI_Cart_sub(lattice->comm, var_coords, &line);
 
+    tmp_size = matrix_c->wight * sub_matrix->height;
+    if (lattice->rank_x == 0) {
+        MPI_Gather(tmp->matrix, tmp_size, MPI_DOUBLE, matrix_c->matrix,
+                   tmp_size, MPI_DOUBLE, 0, line);
+    }
 
-    free(matrix);
-    //free(sub_matrix);
-    //free(tmp);
+    if (lattice->rank_x == 0 && lattice->rank_y==0) {
+       // print_matrix(matrix_c);
+        //printf("\n");
+    }
+
+    return matrix_c;
 }
-
